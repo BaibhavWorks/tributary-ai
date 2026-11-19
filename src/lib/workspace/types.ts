@@ -31,6 +31,7 @@ export interface Thread {
   projectId: string;
   parentId: string | null;
   kind: "main" | "branch";
+  workspaceMode?: WorkspaceMode;
   title: string;
   branchedFromMessageId?: string;
   messages: ChatMessage[];
