@@ -68,7 +68,7 @@ function asDrafts(tags: ModelTag[]): ModelTag[] {
   return tags.map((t) => ({ ...t, role: t.role === "answer" ? "draft" : t.role }));
 }
 
-/** Fast single-model path: instant replies during builder Q&A, deep model for final builds. */
+/** Fast single-model path with automatic fallback across Gemini -> Groq -> OpenRouter. */
 async function fastAnswer(
   keys: ApiKeys,
   turns: ChatTurn[],
@@ -76,17 +76,25 @@ async function fastAnswer(
   workspaceMode?: WorkspaceMode,
 ): Promise<BrainResult> {
   const isBuilderReadyToBuild = workspaceMode === "builder" && turns.length >= 11;
+  const geminiModel = isBuilderReadyToBuild ? MODELS.geminiDeep : MODELS.geminiFast;
 
-  if (isBuilderReadyToBuild) {
-    if (keys.gemini) return callGemini(keys.gemini, MODELS.geminiDeep, turns, signal);
-    if (keys.groq) return callGroq(keys.groq, MODELS.groqHeavy, turns, signal);
-    if (keys.openrouter) return callOpenRouterWaterfall(keys, turns, signal);
-  } else {
-    if (keys.gemini) return callGemini(keys.gemini, MODELS.geminiFast, turns, signal);
-    if (keys.groq) return callGroq(keys.groq, MODELS.groqHeavy, turns, signal);
-    if (keys.openrouter) return callOpenRouterWaterfall(keys, turns, signal);
+  const attempts: Array<() => Promise<BrainResult>> = [];
+  if (keys.gemini) attempts.push(() => callGemini(keys.gemini, geminiModel, turns, signal));
+  if (keys.groq) attempts.push(() => callGroq(keys.groq, MODELS.groqHeavy, turns, signal));
+  if (keys.openrouter) attempts.push(() => callOpenRouterWaterfall(keys, turns, signal));
+
+  if (attempts.length === 0) throw new NoKeysError();
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    try {
+      return await attempt();
+    } catch (err) {
+      if (isAbort(err)) throw err;
+      lastError = err;
+    }
   }
-  throw new NoKeysError();
+  throw lastError instanceof Error ? lastError : new ProviderError("All models failed to respond.");
 }
 
 function synthesisTurns(
