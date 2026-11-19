@@ -1,5 +1,7 @@
 export type Mode = "auto" | "consensus" | "fast";
 
+export type WorkspaceMode = "general" | "builder";
+
 export type Provider = "gemini" | "groq" | "openrouter";
 
 /** One model that contributed to an AI reply, shown as a badge. */
@@ -49,6 +51,7 @@ export interface Workspace {
   threads: Record<string, Thread>;
   prefs: {
     mode: Mode;
+    workspaceMode?: WorkspaceMode;
     collapsed: Record<string, boolean>;
     lastThreadId?: string;
   };
