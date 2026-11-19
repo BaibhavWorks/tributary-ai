@@ -1,15 +1,16 @@
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ChevronRight,
+  Eraser,
   FolderClosed,
   FolderOpen,
   GitBranch,
+  Globe,
   MessageSquare,
   MoreHorizontal,
   Pencil,
   Plus,
   Trash2,
-  Eraser,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -51,6 +52,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
+  createModeThread,
   createProject,
   deleteProject,
   deleteThread,
@@ -67,6 +69,7 @@ import { NameDialog } from "./NameDialog";
 
 type DialogState =
   | { kind: "new-project" }
+  | { kind: "new-builder-chat"; projectId?: string }
   | { kind: "rename-project"; project: Project }
   | { kind: "rename-thread"; thread: Thread }
   | { kind: "delete-project"; project: Project }
@@ -82,16 +85,21 @@ export function AppSidebar() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const pending = usePending();
 
+  const activeThread = activeId && ws ? ws.threads[activeId] : undefined;
+  const workspaceMode = activeThread?.workspaceMode ?? ws?.prefs.workspaceMode ?? "general";
+  const isBuilder = workspaceMode === "builder";
+
   const childrenOf = useMemo(() => {
     const map: Record<string, Thread[]> = {};
     if (!ws) return map;
     for (const t of Object.values(ws.threads)) {
       if (!t.parentId) continue;
+      if ((t.workspaceMode ?? "general") !== workspaceMode) continue;
       (map[t.parentId] ??= []).push(t);
     }
     for (const list of Object.values(map)) list.sort((a, b) => a.createdAt - b.createdAt);
     return map;
-  }, [ws]);
+  }, [ws, workspaceMode]);
 
   const go = (threadId: string) => {
     navigate({ to: "/chat/$threadId", params: { threadId } });
@@ -120,7 +128,7 @@ export function AppSidebar() {
               Tributary
             </div>
             <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              research · code
+              {isBuilder ? "website builder" : "research · code"}
             </div>
           </div>
         </Link>
@@ -128,13 +136,21 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel className="eyebrow">Projects</SidebarGroupLabel>
+          <SidebarGroupLabel className="eyebrow">
+            {isBuilder ? "Website Builds" : "Projects"}
+          </SidebarGroupLabel>
           <SidebarGroupAction
-            title="New project"
-            onClick={() => setDialog({ kind: "new-project" })}
+            title={isBuilder ? "New website build" : "New project"}
+            onClick={() =>
+              setDialog(
+                isBuilder
+                  ? { kind: "new-builder-chat", projectId: activeThread?.projectId }
+                  : { kind: "new-project" },
+              )
+            }
           >
             <Plus />
-            <span className="sr-only">New project</span>
+            <span className="sr-only">{isBuilder ? "New website build" : "New project"}</span>
           </SidebarGroupAction>
           <SidebarMenu>
             {!ws &&
@@ -145,10 +161,22 @@ export function AppSidebar() {
               ))}
             {ws?.projects.map((project) => {
               const open = !ws.prefs.collapsed[project.id];
-              const main = ws.threads[project.mainThreadId];
+              const rootThreads = Object.values(ws.threads)
+                .filter(
+                  (t) =>
+                    t.projectId === project.id &&
+                    t.kind === "main" &&
+                    (t.workspaceMode ?? "general") === workspaceMode,
+                )
+                .sort((a, b) => a.createdAt - b.createdAt);
+
               const branchCount = Object.values(ws.threads).filter(
-                (t) => t.projectId === project.id && t.kind === "branch",
+                (t) =>
+                  t.projectId === project.id &&
+                  t.kind === "branch" &&
+                  (t.workspaceMode ?? "general") === workspaceMode,
               ).length;
+
               return (
                 <SidebarMenuItem key={project.id}>
                   <SidebarMenuButton
@@ -176,6 +204,18 @@ export function AppSidebar() {
                       </SidebarMenuAction>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent side="right" align="start" className="w-44">
+                      {isBuilder && (
+                        <>
+                          <DropdownMenuItem
+                            onClick={() =>
+                              setDialog({ kind: "new-builder-chat", projectId: project.id })
+                            }
+                          >
+                            <Globe /> New website build
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                        </>
+                      )}
                       <DropdownMenuItem
                         onClick={() => setDialog({ kind: "rename-project", project })}
                       >
@@ -191,17 +231,34 @@ export function AppSidebar() {
                     </DropdownMenuContent>
                   </DropdownMenu>
 
-                  {open && main && (
+                  {open && (
                     <SidebarMenuSub className="mr-0 pr-0">
-                      <ThreadNode
-                        thread={main}
-                        childrenOf={childrenOf}
-                        activeId={activeId}
-                        pending={pending}
-                        onOpen={go}
-                        onRename={(t) => setDialog({ kind: "rename-thread", thread: t })}
-                        onDelete={(t) => setDialog({ kind: "delete-thread", thread: t })}
-                      />
+                      {rootThreads.map((root) => (
+                        <ThreadNode
+                          key={root.id}
+                          thread={root}
+                          childrenOf={childrenOf}
+                          activeId={activeId}
+                          pending={pending}
+                          onOpen={go}
+                          onRename={(t) => setDialog({ kind: "rename-thread", thread: t })}
+                          onDelete={(t) => setDialog({ kind: "delete-thread", thread: t })}
+                        />
+                      ))}
+                      {isBuilder && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDialog({ kind: "new-builder-chat", projectId: project.id })
+                            }
+                            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                          >
+                            <Plus className="size-3.5 text-primary" />
+                            <span>New website build</span>
+                          </button>
+                        </li>
+                      )}
                     </SidebarMenuSub>
                   )}
                 </SidebarMenuItem>
@@ -212,14 +269,27 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="p-3">
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full justify-start gap-2 border-sidebar-border bg-transparent"
-          onClick={() => setDialog({ kind: "new-project" })}
-        >
-          <Plus /> New project
-        </Button>
+        {isBuilder ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start gap-2 border-sidebar-border bg-transparent"
+            onClick={() =>
+              setDialog({ kind: "new-builder-chat", projectId: activeThread?.projectId })
+            }
+          >
+            <Plus /> New website build
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start gap-2 border-sidebar-border bg-transparent"
+            onClick={() => setDialog({ kind: "new-project" })}
+          >
+            <Plus /> New project
+          </Button>
+        )}
         <p className="px-1 text-[11px] leading-snug text-muted-foreground">
           Saved privately in this browser.
         </p>
@@ -238,6 +308,22 @@ export function AppSidebar() {
         }}
       />
       <NameDialog
+        open={dialog?.kind === "new-builder-chat"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title="New website build"
+        description="Start a fresh 5-question guided website architect session."
+        placeholder="e.g. Funkey Café landing page"
+        submitLabel="Start building"
+        onSubmit={(name) => {
+          const threadId = createModeThread(
+            "builder",
+            dialog?.kind === "new-builder-chat" ? dialog.projectId : undefined,
+            name.trim() || "Website Builder",
+          );
+          go(threadId);
+        }}
+      />
+      <NameDialog
         open={dialog?.kind === "rename-project"}
         onOpenChange={(o) => !o && setDialog(null)}
         title="Rename project"
@@ -249,7 +335,7 @@ export function AppSidebar() {
       <NameDialog
         open={dialog?.kind === "rename-thread"}
         onOpenChange={(o) => !o && setDialog(null)}
-        title="Rename branch"
+        title="Rename chat"
         initialValue={dialog?.kind === "rename-thread" ? dialog.thread.title : ""}
         onSubmit={(name) =>
           dialog?.kind === "rename-thread" && renameThread(dialog.thread.id, name)
@@ -266,14 +352,14 @@ export function AppSidebar() {
               {dialog?.kind === "delete-project"
                 ? `Delete “${dialog.project.name}”?`
                 : dialog?.kind === "delete-thread" && dialog.thread.kind === "main"
-                  ? "Clear the Main Chat?"
+                  ? "Clear messages in this chat?"
                   : "Delete this branch?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {dialog?.kind === "delete-project"
-                ? "The project, its Main Chat and every branch will be removed from this browser."
+                ? "The project, its chats and every branch will be removed from this browser."
                 : dialog?.kind === "delete-thread" && dialog.thread.kind === "main"
-                  ? "All messages in the Main Chat will be removed. Existing branches are kept."
+                  ? "All messages in this chat will be removed. Existing branches are kept."
                   : "This branch and all of its sub-branches will be removed."}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -326,7 +412,8 @@ function ThreadNode({
 }: ThreadNodeProps) {
   const kids = childrenOf[thread.id] ?? [];
   const isMain = thread.kind === "main";
-  const Icon = isMain ? MessageSquare : GitBranch;
+  const isBuilder = (thread.workspaceMode ?? "general") === "builder";
+  const Icon = isMain ? (isBuilder ? Globe : MessageSquare) : GitBranch;
   return (
     <li className="group/row relative">
       <SidebarMenuSubButton
@@ -363,7 +450,7 @@ function ThreadNode({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="start" className="w-44">
-          {!isMain && (
+          {(!isMain || isBuilder) && (
             <DropdownMenuItem onClick={() => onRename(thread)}>
               <Pencil /> Rename
             </DropdownMenuItem>
