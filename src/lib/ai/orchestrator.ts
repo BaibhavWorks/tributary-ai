@@ -68,15 +68,22 @@ function asDrafts(tags: ModelTag[]): ModelTag[] {
   return tags.map((t) => ({ ...t, role: t.role === "answer" ? "draft" : t.role }));
 }
 
-/** Fast single-model path: flash-lite, or the next available brain when no Gemini key. */
+/** Fast single-model path: flash-lite in general mode, or deeper model when building websites. */
 async function fastAnswer(
   keys: ApiKeys,
   turns: ChatTurn[],
   signal?: AbortSignal,
+  workspaceMode?: WorkspaceMode,
 ): Promise<BrainResult> {
-  if (keys.gemini) return callGemini(keys.gemini, MODELS.geminiFast, turns, signal);
-  if (keys.groq) return callGroq(keys.groq, MODELS.groqHeavy, turns, signal);
-  if (keys.openrouter) return callOpenRouterWaterfall(keys, turns, signal);
+  if (workspaceMode === "builder") {
+    if (keys.gemini) return callGemini(keys.gemini, MODELS.geminiDeep, turns, signal);
+    if (keys.groq) return callGroq(keys.groq, MODELS.groqHeavy, turns, signal);
+    if (keys.openrouter) return callOpenRouterWaterfall(keys, turns, signal);
+  } else {
+    if (keys.gemini) return callGemini(keys.gemini, MODELS.geminiFast, turns, signal);
+    if (keys.groq) return callGroq(keys.groq, MODELS.groqHeavy, turns, signal);
+    if (keys.openrouter) return callOpenRouterWaterfall(keys, turns, signal);
+  }
   throw new NoKeysError();
 }
 
@@ -168,9 +175,13 @@ export async function runMode(opts: RunOptions): Promise<RunResult> {
   const prompt = history[history.length - 1]?.content ?? "";
 
   if (mode === "fast" || (mode === "auto" && !isComplex(prompt))) {
-    onStage?.("Thinking…");
-    const r = await fastAnswer(keys, turns, signal);
-    return { content: r.content, models: r.tags, route: mode === "fast" ? "Fast" : "Auto · quick" };
+    onStage?.(workspaceMode === "builder" ? "Architecting…" : "Thinking…");
+    const r = await fastAnswer(keys, turns, signal, workspaceMode);
+    return {
+      content: r.content,
+      models: r.tags,
+      route: workspaceMode === "builder" ? "Builder · deep" : mode === "fast" ? "Fast" : "Auto · quick",
+    };
   }
 
   if (mode === "auto") {
@@ -187,12 +198,12 @@ export async function runMode(opts: RunOptions): Promise<RunResult> {
       });
     if (brains.length === 0) {
       onStage?.("Thinking…");
-      const r = await fastAnswer(keys, turns, signal);
+      const r = await fastAnswer(keys, turns, signal, workspaceMode);
       return { content: r.content, models: r.tags, route: "Auto · quick" };
     }
     onStage?.(brains.length === 2 ? "Consulting Gemini + Groq…" : "Thinking deeply…");
     const r = await mixture(brains, opts, false);
-    return { ...r, route: "Auto · mix" };
+    return { ...r, route: workspaceMode === "builder" ? "Builder · mix" : "Auto · mix" };
   }
 
   // Heavyweight consensus: Gemini + Groq + OpenRouter coding waterfall.
