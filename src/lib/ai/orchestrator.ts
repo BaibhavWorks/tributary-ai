@@ -68,14 +68,16 @@ function asDrafts(tags: ModelTag[]): ModelTag[] {
   return tags.map((t) => ({ ...t, role: t.role === "answer" ? "draft" : t.role }));
 }
 
-/** Fast single-model path: flash-lite in general mode, or deeper model when building websites. */
+/** Fast single-model path: instant replies during builder Q&A, deep model for final builds. */
 async function fastAnswer(
   keys: ApiKeys,
   turns: ChatTurn[],
   signal?: AbortSignal,
   workspaceMode?: WorkspaceMode,
 ): Promise<BrainResult> {
-  if (workspaceMode === "builder") {
+  const isBuilderReadyToBuild = workspaceMode === "builder" && turns.length >= 11;
+
+  if (isBuilderReadyToBuild) {
     if (keys.gemini) return callGemini(keys.gemini, MODELS.geminiDeep, turns, signal);
     if (keys.groq) return callGroq(keys.groq, MODELS.groqHeavy, turns, signal);
     if (keys.openrouter) return callOpenRouterWaterfall(keys, turns, signal);
@@ -133,7 +135,6 @@ async function synthesize(
       if (isAbort(err)) throw err;
     }
   }
-  // No synthesizer available: return the most thorough draft.
   const best = [...drafts].sort((a, b) => b.content.length - a.content.length)[0];
   return { content: best?.content ?? "", tags: [] };
 }
