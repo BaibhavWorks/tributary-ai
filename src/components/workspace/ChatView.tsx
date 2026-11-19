@@ -64,8 +64,9 @@ const BUILDER_SUGGESTIONS = [
 
 async function sendMessage(threadId: string, text: string) {
   const ws = getWorkspace();
+  const thread = ws.threads[threadId];
   const mode = ws.prefs.mode;
-  const workspaceMode = ws.prefs.workspaceMode ?? "general";
+  const workspaceMode = thread?.workspaceMode ?? ws.prefs.workspaceMode ?? "general";
   appendMessage(threadId, { id: uid("m_"), role: "user", content: text, createdAt: Date.now() });
   const history = getWorkspace().threads[threadId]?.messages ?? [];
   const controller = new AbortController();
@@ -120,7 +121,7 @@ export function ChatView({ thread }: { thread: Thread }) {
   const stage = pending[thread.id];
   const busy = !!stage;
   const mode = ws?.prefs.mode ?? "auto";
-  const workspaceMode = ws?.prefs.workspaceMode ?? "general";
+  const workspaceMode = thread.workspaceMode ?? ws?.prefs.workspaceMode ?? "general";
   const hasKeys = !!(keys && (keys.gemini || keys.groq || keys.openrouter));
   const [text, setText] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -130,6 +131,13 @@ export function ChatView({ thread }: { thread: Thread }) {
   useEffect(() => {
     inputRef.current?.focus();
   }, [thread.id, busy]);
+
+  const handleWorkspaceModeChange = (nextMode: WorkspaceMode) => {
+    const targetThreadId = setWorkspaceMode(nextMode, thread.projectId);
+    if (targetThreadId !== thread.id) {
+      navigate({ to: "/chat/$threadId", params: { threadId: targetThreadId } });
+    }
+  };
 
   const branch = (messageId: string) => {
     const id = createBranch(thread.id, messageId);
@@ -193,7 +201,7 @@ export function ChatView({ thread }: { thread: Thread }) {
             value={mode}
             onChange={setMode}
             workspaceMode={workspaceMode}
-            onChangeWorkspaceMode={setWorkspaceMode}
+            onChangeWorkspaceMode={handleWorkspaceModeChange}
           />
           {!hasKeys && keys && (
             <button
@@ -332,15 +340,15 @@ function EmptyState({
               : "Three brains, one answer"}
         </h1>
         <p className="mx-auto max-w-md text-sm text-muted-foreground">
-          {isBuilder
-            ? "Answer 5 quick questions about your project and theme, and Tributary will architect a complete responsive website."
-            : (
-              <>
-                Mix Gemini, Groq and OpenRouter. Fork any reply with{" "}
-                <span className="text-primary">Branch here</span> to explore a tangent without losing
-                the thread.
-              </>
-            )}
+          {isBuilder ? (
+            "Answer 5 quick questions about your project and theme, and Tributary will architect a complete responsive website."
+          ) : (
+            <>
+              Mix Gemini, Groq and OpenRouter. Fork any reply with{" "}
+              <span className="text-primary">Branch here</span> to explore a tangent without losing
+              the thread.
+            </>
+          )}
         </p>
       </div>
       {hasKeys ? (
