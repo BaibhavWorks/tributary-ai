@@ -17,7 +17,10 @@ export function uid(prefix = ""): string {
   return prefix + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 }
 
-function makeProject(name: string): { project: Project; main: Thread } {
+function makeProject(
+  name: string,
+  workspaceMode: WorkspaceMode = "general",
+): { project: Project; main: Thread } {
   const now = Date.now();
   const projectId = uid("p_");
   const main: Thread = {
@@ -25,7 +28,8 @@ function makeProject(name: string): { project: Project; main: Thread } {
     projectId,
     parentId: null,
     kind: "main",
-    title: "Main Chat",
+    workspaceMode,
+    title: workspaceMode === "builder" ? "Website Builder" : "Main Chat",
     messages: [],
     createdAt: now,
     updatedAt: now,
@@ -34,7 +38,7 @@ function makeProject(name: string): { project: Project; main: Thread } {
 }
 
 function freshWorkspace(): Workspace {
-  const { project, main } = makeProject("My first project");
+  const { project, main } = makeProject("My first project", "general");
   return {
     version: 1,
     projects: [project],
@@ -138,13 +142,50 @@ export function useApiKeys(): ApiKeys | null {
 /* ---------- actions ---------- */
 
 export function createProject(name: string): { projectId: string; mainThreadId: string } {
-  const { project, main } = makeProject(name.trim() || "Untitled project");
+  const currentMode = getWorkspace().prefs.workspaceMode ?? "general";
+  const { project, main } = makeProject(name.trim() || "Untitled project", currentMode);
   update((s) => ({
     ...s,
     projects: [...s.projects, project],
     threads: { ...s.threads, [main.id]: main },
   }));
   return { projectId: project.id, mainThreadId: main.id };
+}
+
+export function createModeThread(
+  workspaceMode: WorkspaceMode,
+  projectId?: string,
+  title?: string,
+): string {
+  const s = getWorkspace();
+  const targetProjectId = projectId ?? s.projects[0]?.id;
+  if (!targetProjectId) {
+    const created = createProject("My first project");
+    return created.mainThreadId;
+  }
+  const now = Date.now();
+  const thread: Thread = {
+    id: uid("t_"),
+    projectId: targetProjectId,
+    parentId: null,
+    kind: "main",
+    workspaceMode,
+    title: title ?? (workspaceMode === "builder" ? "Website Builder" : "Main Chat"),
+    messages: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  update((st) => ({
+    ...st,
+    threads: { ...st.threads, [thread.id]: thread },
+    prefs: {
+      ...st.prefs,
+      workspaceMode,
+      lastThreadId: thread.id,
+      collapsed: { ...st.prefs.collapsed, [targetProjectId]: false },
+    },
+  }));
+  return thread.id;
 }
 
 export function renameProject(projectId: string, name: string) {
@@ -181,13 +222,33 @@ export function setMode(mode: Mode) {
   update((s) => ({ ...s, prefs: { ...s.prefs, mode } }));
 }
 
-export function setWorkspaceMode(workspaceMode: WorkspaceMode) {
-  update((s) => ({ ...s, prefs: { ...s.prefs, workspaceMode } }));
+export function setWorkspaceMode(workspaceMode: WorkspaceMode, activeProjectId?: string): string {
+  const s = getWorkspace();
+  const matchingThreads = Object.values(s.threads)
+    .filter((t) => (t.workspaceMode ?? "general") === workspaceMode)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const existing = matchingThreads[0];
+  if (existing) {
+    update((st) => ({
+      ...st,
+      prefs: { ...st.prefs, workspaceMode, lastThreadId: existing.id },
+    }));
+    return existing.id;
+  }
+
+  return createModeThread(workspaceMode, activeProjectId);
 }
 
 export function setLastThread(threadId: string) {
-  if (getWorkspace().prefs.lastThreadId === threadId) return;
-  update((s) => ({ ...s, prefs: { ...s.prefs, lastThreadId: threadId } }));
+  const s = getWorkspace();
+  const thread = s.threads[threadId];
+  const threadMode = thread?.workspaceMode ?? "general";
+  if (s.prefs.lastThreadId === threadId && s.prefs.workspaceMode === threadMode) return;
+  update((st) => ({
+    ...st,
+    prefs: { ...st.prefs, lastThreadId: threadId, workspaceMode: threadMode },
+  }));
 }
 
 export function renameThread(threadId: string, title: string) {
@@ -259,6 +320,7 @@ export function createBranch(threadId: string, messageId: string): string | null
     projectId: source.projectId,
     parentId: source.id,
     kind: "branch",
+    workspaceMode: source.workspaceMode ?? "general",
     title: base.length > 42 ? base.slice(0, 40) + "…" : base || "New branch",
     branchedFromMessageId: messageId,
     messages: history.map((m) => ({ ...m })),
