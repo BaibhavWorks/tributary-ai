@@ -7,6 +7,7 @@ import {
   type Project,
   type Thread,
   type Workspace,
+  type WorkspaceMode,
 } from "./types";
 
 const WS_KEY = "tributary.workspace.v1";
@@ -38,7 +39,7 @@ function freshWorkspace(): Workspace {
     version: 1,
     projects: [project],
     threads: { [main.id]: main },
-    prefs: { mode: "auto", collapsed: {}, lastThreadId: main.id },
+    prefs: { mode: "auto", workspaceMode: "general", collapsed: {}, lastThreadId: main.id },
   };
 }
 
@@ -59,7 +60,12 @@ function readWorkspace(): Workspace {
     ws = freshWorkspace();
     window.localStorage.setItem(WS_KEY, JSON.stringify(ws));
   }
-  ws.prefs = { ...ws.prefs, mode: ws.prefs?.mode ?? "auto", collapsed: ws.prefs?.collapsed ?? {} };
+  ws.prefs = {
+    ...ws.prefs,
+    mode: ws.prefs?.mode ?? "auto",
+    workspaceMode: ws.prefs?.workspaceMode ?? "general",
+    collapsed: ws.prefs?.collapsed ?? {},
+  };
   return ws;
 }
 
@@ -173,6 +179,10 @@ export function toggleProjectCollapsed(projectId: string) {
 
 export function setMode(mode: Mode) {
   update((s) => ({ ...s, prefs: { ...s.prefs, mode } }));
+}
+
+export function setWorkspaceMode(workspaceMode: WorkspaceMode) {
+  update((s) => ({ ...s, prefs: { ...s.prefs, workspaceMode } }));
 }
 
 export function setLastThread(threadId: string) {
