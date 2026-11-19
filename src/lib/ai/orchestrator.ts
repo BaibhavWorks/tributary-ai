@@ -1,4 +1,5 @@
-import type { ApiKeys, ChatMessage, Mode, ModelTag } from "@/lib/workspace/types";
+import { BUILDER_SYSTEM_PROMPT } from "@/lib/builder/prompt";
+import type { ApiKeys, ChatMessage, Mode, ModelTag, WorkspaceMode } from "@/lib/workspace/types";
 import { isComplex } from "./complexity";
 import {
   MODELS,
@@ -24,6 +25,7 @@ export interface RunResult {
 
 export interface RunOptions {
   mode: Mode;
+  workspaceMode?: WorkspaceMode;
   history: ChatMessage[];
   keys: ApiKeys;
   signal?: AbortSignal;
@@ -37,9 +39,13 @@ export class NoKeysError extends Error {
   }
 }
 
-function toTurns(history: ChatMessage[]): ChatTurn[] {
+function getSystemPrompt(workspaceMode?: WorkspaceMode): string {
+  return workspaceMode === "builder" ? BUILDER_SYSTEM_PROMPT : SYSTEM_PROMPT;
+}
+
+function toTurns(history: ChatMessage[], workspaceMode?: WorkspaceMode): ChatTurn[] {
   return [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: getSystemPrompt(workspaceMode) },
     ...history
       .filter((m) => !m.error)
       .slice(-HISTORY_LIMIT)
@@ -78,9 +84,11 @@ function synthesisTurns(
   history: ChatMessage[],
   drafts: BrainResult[],
   crossCheck: boolean,
+  workspaceMode?: WorkspaceMode,
 ): ChatTurn[] {
-  const prior = toTurns(history.slice(0, -1));
+  const prior = toTurns(history.slice(0, -1), workspaceMode);
   const question = history[history.length - 1]?.content ?? "";
+  const basePrompt = getSystemPrompt(workspaceMode);
   const editorRules = crossCheck
     ? "You are the final reviewer in a three-model consensus system. Cross-check the independent drafts below line by line: verify facts, test the logic of any code mentally, fix bugs, and resolve contradictions by reasoning about which claim is correct. Then write ONE unified, corrected, complete final answer."
     : "You are the final editor in a multi-model system. Merge the best insights of the independent drafts below into ONE clear, accurate, complete answer. Drop redundancy and anything that looks wrong.";
@@ -88,7 +96,7 @@ function synthesisTurns(
   return [
     {
       role: "system",
-      content: `${SYSTEM_PROMPT}\n\n${editorRules}\nNever mention drafts, models, or this merging process in your answer.`,
+      content: `${basePrompt}\n\n${editorRules}\nNever mention drafts, models, or this merging process in your answer.`,
     },
     ...prior.slice(1),
     {
@@ -104,8 +112,9 @@ async function synthesize(
   drafts: BrainResult[],
   crossCheck: boolean,
   signal?: AbortSignal,
+  workspaceMode?: WorkspaceMode,
 ): Promise<BrainResult> {
-  const turns = synthesisTurns(history, drafts, crossCheck);
+  const turns = synthesisTurns(history, drafts, crossCheck, workspaceMode);
   const attempts: Array<() => Promise<BrainResult>> = [];
   if (keys.gemini) attempts.push(() => callGemini(keys.gemini, MODELS.geminiDeep, turns, signal));
   if (keys.groq) attempts.push(() => callGroq(keys.groq, MODELS.groqHeavy, turns, signal));
@@ -127,7 +136,7 @@ async function mixture(
   opts: RunOptions,
   crossCheck: boolean,
 ): Promise<{ content: string; models: ModelTag[] }> {
-  const { keys, history, signal, onStage } = opts;
+  const { keys, history, signal, onStage, workspaceMode } = opts;
   const settled = await Promise.all(brains.map((b) => settle(b.run(), b.label)));
   const ok = settled.filter((s): s is Extract<Settled, { ok: true }> => s.ok).map((s) => s.value);
   const failedTags: ModelTag[] = settled
@@ -145,7 +154,7 @@ async function mixture(
     return { content: only.content, models: [...only.tags, ...failedTags] };
   }
   onStage?.(crossCheck ? `Cross-checking ${ok.length} answers…` : "Merging insights…");
-  const final = await synthesize(keys, history, ok, crossCheck, signal);
+  const final = await synthesize(keys, history, ok, crossCheck, signal, workspaceMode);
   return {
     content: final.content,
     models: [...ok.flatMap((r) => asDrafts(r.tags)), ...failedTags, ...final.tags],
@@ -153,9 +162,9 @@ async function mixture(
 }
 
 export async function runMode(opts: RunOptions): Promise<RunResult> {
-  const { mode, history, keys, signal, onStage } = opts;
+  const { mode, workspaceMode, history, keys, signal, onStage } = opts;
   if (!keys.gemini && !keys.groq && !keys.openrouter) throw new NoKeysError();
-  const turns = toTurns(history);
+  const turns = toTurns(history, workspaceMode);
   const prompt = history[history.length - 1]?.content ?? "";
 
   if (mode === "fast" || (mode === "auto" && !isComplex(prompt))) {
