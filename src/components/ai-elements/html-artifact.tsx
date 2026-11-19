@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { Code2Icon, EyeIcon, RotateCwIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   CodeBlock,
   CodeBlockContainer,
@@ -20,6 +20,16 @@ type View = "code" | "preview";
  * localStorage (where the user's API keys live).
  */
 export const PREVIEW_SANDBOX = "allow-scripts allow-forms allow-modals allow-popups allow-pointer-lock";
+
+const PREVIEW_BRIDGE_SCRIPT = `<script>(function(){document.addEventListener("click",function(e){var link=e.target&&e.target.closest?e.target.closest("a[href]"):null;if(!link)return;var href=link.getAttribute("href")||"";if(href==="#"){e.preventDefault();window.scrollTo({top:0,behavior:"smooth"});return;}if(href.startsWith("#")){e.preventDefault();var target=document.querySelector(href);if(target)target.scrollIntoView({behavior:"smooth",block:"start"});}});window.addEventListener("error",function(e){var box=document.getElementById("__tributary_preview_err");if(!box){box=document.createElement("div");box.id="__tributary_preview_err";box.style.cssText="position:fixed;bottom:12px;left:12px;right:12px;z-index:9999;padding:10px 12px;border-radius:8px;background:#2b1115;color:#fecdd3;border:1px solid #f43f5e66;font:12px/1.4 monospace;";document.body.appendChild(box);}box.textContent="Preview script note: "+(e.message||"Action blocked in sandbox");});})();</script>`;
+
+function injectPreviewBridge(html: string): string {
+  if (!html) return html;
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${PREVIEW_BRIDGE_SCRIPT}</body>`);
+  }
+  return `${html}\n${PREVIEW_BRIDGE_SCRIPT}`;
+}
 
 /** Live Preview is the default once the block has finished streaming. */
 export function resolveView(chosen: View | null, isIncomplete: boolean): View {
@@ -60,6 +70,7 @@ export function HtmlArtifact({ code, language, isIncomplete }: CustomRendererPro
   const [chosen, setChosen] = useState<View | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const view = resolveView(chosen, isIncomplete);
+  const previewSrcDoc = useMemo(() => injectPreviewBridge(code), [code]);
 
   const actions = (
     <>
@@ -119,7 +130,7 @@ export function HtmlArtifact({ code, language, isIncomplete }: CustomRendererPro
         <iframe
           key={reloadKey}
           title="Live Preview"
-          srcDoc={code}
+          srcDoc={previewSrcDoc}
           sandbox={PREVIEW_SANDBOX}
           className="size-full border-0 bg-preview-canvas"
         />
