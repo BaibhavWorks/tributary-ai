@@ -34,12 +34,13 @@ import {
   getWorkspace,
   setMode,
   setPending,
+  setWorkspaceMode,
   uid,
   useApiKeys,
   usePending,
   useWorkspace,
 } from "@/lib/workspace/store";
-import type { ChatMessage, Thread } from "@/lib/workspace/types";
+import type { ChatMessage, Thread, WorkspaceMode } from "@/lib/workspace/types";
 import { ModeSelector } from "./ModeSelector";
 import { ModelBadges } from "./ModelBadges";
 import { SettingsDialog } from "./SettingsDialog";
@@ -47,16 +48,24 @@ import { SettingsDialog } from "./SettingsDialog";
 // Lives outside React so Stop still works after navigating away and back.
 const controllers = new Map<string, AbortController>();
 
-const SUGGESTIONS = [
+const GENERAL_SUGGESTIONS = [
   "Explain the CAP theorem with a concrete example",
   "Write a TypeScript debounce with cancel and flush",
   "Compare RAG vs fine-tuning for a support bot",
   "What's a good name for a CLI that diffs JSON?",
 ];
 
+const BUILDER_SUGGESTIONS = [
+  "Build a modern portfolio website for a software developer",
+  "Create a landing page for a cozy specialty coffee shop",
+  "Design a clean SaaS product waitlist landing page",
+  "Build a personal fitness & MMA coaching website",
+];
+
 async function sendMessage(threadId: string, text: string) {
   const ws = getWorkspace();
   const mode = ws.prefs.mode;
+  const workspaceMode = ws.prefs.workspaceMode ?? "general";
   appendMessage(threadId, { id: uid("m_"), role: "user", content: text, createdAt: Date.now() });
   const history = getWorkspace().threads[threadId]?.messages ?? [];
   const controller = new AbortController();
@@ -65,6 +74,7 @@ async function sendMessage(threadId: string, text: string) {
   try {
     const r = await runMode({
       mode,
+      workspaceMode,
       history,
       keys: getKeys(),
       signal: controller.signal,
@@ -110,6 +120,7 @@ export function ChatView({ thread }: { thread: Thread }) {
   const stage = pending[thread.id];
   const busy = !!stage;
   const mode = ws?.prefs.mode ?? "auto";
+  const workspaceMode = ws?.prefs.workspaceMode ?? "general";
   const hasKeys = !!(keys && (keys.gemini || keys.groq || keys.openrouter));
   const [text, setText] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -145,6 +156,7 @@ export function ChatView({ thread }: { thread: Thread }) {
             <EmptyState
               hasKeys={hasKeys}
               isBranch={thread.kind === "branch"}
+              workspaceMode={workspaceMode}
               onOpenSettings={() => setSettingsOpen(true)}
               onPick={fill}
             />
@@ -177,7 +189,12 @@ export function ChatView({ thread }: { thread: Thread }) {
 
       <div className="mx-auto w-full max-w-3xl px-4 pb-4">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <ModeSelector value={mode} onChange={setMode} />
+          <ModeSelector
+            value={mode}
+            onChange={setMode}
+            workspaceMode={workspaceMode}
+            onChangeWorkspaceMode={setWorkspaceMode}
+          />
           {!hasKeys && keys && (
             <button
               type="button"
@@ -200,9 +217,11 @@ export function ChatView({ thread }: { thread: Thread }) {
           <PromptInputTextarea
             ref={inputRef}
             placeholder={
-              thread.kind === "branch"
-                ? "Continue this sub-topic…"
-                : "Ask anything — research, code, ideas…"
+              workspaceMode === "builder"
+                ? "Describe your website idea or answer the architect's questions…"
+                : thread.kind === "branch"
+                  ? "Continue this sub-topic…"
+                  : "Ask anything — research, code, ideas…"
             }
             onChange={(e) => setText(e.currentTarget.value)}
           />
@@ -288,30 +307,45 @@ function ChatBubble({
 function EmptyState({
   hasKeys,
   isBranch,
+  workspaceMode,
   onOpenSettings,
   onPick,
 }: {
   hasKeys: boolean;
   isBranch: boolean;
+  workspaceMode: WorkspaceMode;
   onOpenSettings: () => void;
   onPick: (s: string) => void;
 }) {
+  const isBuilder = workspaceMode === "builder";
+  const suggestions = isBuilder ? BUILDER_SUGGESTIONS : GENERAL_SUGGESTIONS;
+
   return (
     <div className="flex flex-col items-center gap-6 pt-[12vh] text-center">
       <img src={mark} alt="" width={56} height={56} className="size-14" />
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">
-          {isBranch ? "A fresh sub-topic" : "Three brains, one answer"}
+          {isBuilder
+            ? "Guided Website Builder"
+            : isBranch
+              ? "A fresh sub-topic"
+              : "Three brains, one answer"}
         </h1>
         <p className="mx-auto max-w-md text-sm text-muted-foreground">
-          Mix Gemini, Groq and OpenRouter. Fork any reply with{" "}
-          <span className="text-primary">Branch here</span> to explore a tangent without losing the
-          thread.
+          {isBuilder
+            ? "Answer 5 quick questions about your project and theme, and Tributary will architect a complete responsive website."
+            : (
+              <>
+                Mix Gemini, Groq and OpenRouter. Fork any reply with{" "}
+                <span className="text-primary">Branch here</span> to explore a tangent without losing
+                the thread.
+              </>
+            )}
         </p>
       </div>
       {hasKeys ? (
         <div className="grid w-full max-w-xl gap-2 sm:grid-cols-2">
-          {SUGGESTIONS.map((s) => (
+          {suggestions.map((s) => (
             <button
               key={s}
               type="button"
