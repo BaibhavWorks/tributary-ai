@@ -53,6 +53,24 @@ function toTurns(history: ChatMessage[], workspaceMode?: WorkspaceMode): ChatTur
   ];
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`));
+    }, ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 type Settled = { ok: true; value: BrainResult } | { ok: false; error: unknown; label: ModelTag };
 
 async function settle(p: Promise<BrainResult>, label: ModelTag): Promise<Settled> {
@@ -68,27 +86,50 @@ function asDrafts(tags: ModelTag[]): ModelTag[] {
   return tags.map((t) => ({ ...t, role: t.role === "answer" ? "draft" : t.role }));
 }
 
-/** Fast single-model path with automatic fallback across Gemini -> Groq -> OpenRouter. */
+function isBuilderDiscoveryPhase(turns: ChatTurn[], workspaceMode?: WorkspaceMode): boolean {
+  if (workspaceMode !== "builder") return false;
+  const hasExistingBuild = turns.some((t) => t.role === "assistant" && /```html/i.test(t.content));
+  return !hasExistingBuild && turns.length < 11;
+}
+
+/** Single-model path with strict timeouts and automatic failover across Gemini -> Groq -> OpenRouter. */
 async function fastAnswer(
   keys: ApiKeys,
   turns: ChatTurn[],
   signal?: AbortSignal,
   workspaceMode?: WorkspaceMode,
 ): Promise<BrainResult> {
-  const isBuilderReadyToBuild = workspaceMode === "builder" && turns.length >= 11;
-  const geminiModel = isBuilderReadyToBuild ? MODELS.geminiDeep : MODELS.geminiFast;
+  const discovery = isBuilderDiscoveryPhase(turns, workspaceMode);
+  const useDeepModel = workspaceMode === "builder" && !discovery;
+  const geminiModel = useDeepModel ? MODELS.geminiDeep : MODELS.geminiFast;
+  const timeoutMs = useDeepModel ? 45000 : 12000;
 
-  const attempts: Array<() => Promise<BrainResult>> = [];
-  if (keys.gemini) attempts.push(() => callGemini(keys.gemini, geminiModel, turns, signal));
-  if (keys.groq) attempts.push(() => callGroq(keys.groq, MODELS.groqHeavy, turns, signal));
-  if (keys.openrouter) attempts.push(() => callOpenRouterWaterfall(keys, turns, signal));
+  const attempts: Array<{ run: () => Promise<BrainResult>; name: string }> = [];
+  if (keys.gemini) {
+    attempts.push({
+      run: () => callGemini(keys.gemini, geminiModel, turns, signal),
+      name: "Gemini",
+    });
+  }
+  if (keys.groq) {
+    attempts.push({
+      run: () => callGroq(keys.groq, MODELS.groqHeavy, turns, signal),
+      name: "Groq",
+    });
+  }
+  if (keys.openrouter) {
+    attempts.push({
+      run: () => callOpenRouterWaterfall(keys, turns, signal),
+      name: "OpenRouter",
+    });
+  }
 
   if (attempts.length === 0) throw new NoKeysError();
 
   let lastError: unknown;
   for (const attempt of attempts) {
     try {
-      return await attempt();
+      return await withTimeout(attempt.run(), timeoutMs, attempt.name);
     } catch (err) {
       if (isAbort(err)) throw err;
       lastError = err;
@@ -132,12 +173,22 @@ async function synthesize(
   workspaceMode?: WorkspaceMode,
 ): Promise<BrainResult> {
   const turns = synthesisTurns(history, drafts, crossCheck, workspaceMode);
-  const attempts: Array<() => Promise<BrainResult>> = [];
-  if (keys.gemini) attempts.push(() => callGemini(keys.gemini, MODELS.geminiDeep, turns, signal));
-  if (keys.groq) attempts.push(() => callGroq(keys.groq, MODELS.groqHeavy, turns, signal));
+  const attempts: Array<{ run: () => Promise<BrainResult>; name: string }> = [];
+  if (keys.gemini) {
+    attempts.push({
+      run: () => callGemini(keys.gemini, MODELS.geminiDeep, turns, signal),
+      name: "Gemini",
+    });
+  }
+  if (keys.groq) {
+    attempts.push({
+      run: () => callGroq(keys.groq, MODELS.groqHeavy, turns, signal),
+      name: "Groq",
+    });
+  }
   for (const attempt of attempts) {
     try {
-      const r = await attempt();
+      const r = await withTimeout(attempt.run(), 45000, attempt.name);
       return { content: r.content, tags: r.tags.map((t) => ({ ...t, role: "synth" })) };
     } catch (err) {
       if (isAbort(err)) throw err;
@@ -153,7 +204,9 @@ async function mixture(
   crossCheck: boolean,
 ): Promise<{ content: string; models: ModelTag[] }> {
   const { keys, history, signal, onStage, workspaceMode } = opts;
-  const settled = await Promise.all(brains.map((b) => settle(b.run(), b.label)));
+  const settled = await Promise.all(
+    brains.map((b) => settle(withTimeout(b.run(), 45000, b.label.provider), b.label)),
+  );
   const ok = settled.filter((s): s is Extract<Settled, { ok: true }> => s.ok).map((s) => s.value);
   const failedTags: ModelTag[] = settled
     .filter((s): s is Extract<Settled, { ok: false }> => !s.ok)
@@ -182,17 +235,37 @@ export async function runMode(opts: RunOptions): Promise<RunResult> {
   if (!keys.gemini && !keys.groq && !keys.openrouter) throw new NoKeysError();
   const turns = toTurns(history, workspaceMode);
   const prompt = history[history.length - 1]?.content ?? "";
+  const discovery = isBuilderDiscoveryPhase(turns, workspaceMode);
 
-  if (mode === "fast" || (mode === "auto" && !isComplex(prompt))) {
-    onStage?.(workspaceMode === "builder" ? "Architecting…" : "Thinking…");
+  // Keep Builder on a single clean model pass so HTML + JS isn't diluted by draft merging
+  if (
+    mode === "fast" ||
+    workspaceMode === "builder" ||
+    (mode === "auto" && !isComplex(prompt))
+  ) {
+    onStage?.(
+      workspaceMode === "builder"
+        ? discovery
+          ? "Asking next question…"
+          : "Building site…"
+        : "Thinking…",
+    );
     const r = await fastAnswer(keys, turns, signal, workspaceMode);
     return {
       content: r.content,
       models: r.tags,
-      route: workspaceMode === "builder" ? "Builder · deep" : mode === "fast" ? "Fast" : "Auto · quick",
+      route:
+        workspaceMode === "builder"
+          ? discovery
+            ? "Builder · quick"
+            : "Builder · deep"
+          : mode === "fast"
+            ? "Fast"
+            : "Auto · quick",
     };
   }
 
+  // Auto mode for General / complex prompts: multi-model mix
   if (mode === "auto") {
     const brains: Array<{ run: () => Promise<BrainResult>; label: ModelTag }> = [];
     if (keys.gemini)
@@ -212,7 +285,7 @@ export async function runMode(opts: RunOptions): Promise<RunResult> {
     }
     onStage?.(brains.length === 2 ? "Consulting Gemini + Groq…" : "Thinking deeply…");
     const r = await mixture(brains, opts, false);
-    return { ...r, route: workspaceMode === "builder" ? "Builder · mix" : "Auto · mix" };
+    return { ...r, route: "Auto · mix" };
   }
 
   // Heavyweight consensus: Gemini + Groq + OpenRouter coding waterfall.
