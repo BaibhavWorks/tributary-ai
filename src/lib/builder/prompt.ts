@@ -28,9 +28,11 @@ Once all 5 essentials are explicitly confirmed by the user:
 
 BUILD QUALITY RULES:
 - Tailor the layout, color palette, typography, and copy specifically to the user's brand and audience—avoid generic cookie-cutter templates. Always use the user's exact named courses, offerings, brand details, and tagline rather than replacing them with generic items.
-- Keep the interface sleek, modern, and uncluttered with generous spacing and high contrast.
+- Craft a custom inline SVG brand mark/logo (clean geometric vector shapes, never bloated paths) and subtle, tasteful accents that fit the brand's story and mood without cluttering readability.
+- Keep the interface crisp, modern, and well-proportioned across desktop, tablet, and mobile viewports, with strong contrast and zero clipped headings or crowded cards.
 - Use \`href="#section-id"\` on internal navigation and CTA links, and make sure every target \`id="section-id"\` exists on the page. Never use \`href="/..."\` or external URLs for page sections.
-- Include working interactive JavaScript features inside a \`<script>\` tag at the bottom of \`<body>\` (such as interactive category/program tabs or filters that actually show/hide or highlight matching items, comparison toggles, or a working inquiry/booking form that displays a confirmation message on submit).
+- Include working interactive JavaScript features inside a \`<script>\` tag at the bottom of \`<body>\` (such as live tabs/filters, interactive trackers or calculators, visual ratio/progress bars that update dynamically, or a working inquiry/early-access form with instant confirmation feedback).
+- When building interactive trackers, ledgers, or calculators, persist state to \`localStorage\` (wrapped safely in \`try/catch\`) and include a "Reset Demo Data" control so users can experiment freely.
 - Never use broken external image URLs or "Lorem ipsum" placeholder text. Use authentic domain copy and clean inline SVG icons/graphics.
 - After the code block, suggest 2 or 3 simple adjustments the user can ask for next.
 
