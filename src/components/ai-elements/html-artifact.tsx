@@ -1,8 +1,17 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Code2Icon, EyeIcon, RotateCwIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  Code2Icon,
+  EyeIcon,
+  Maximize2Icon,
+  Minimize2Icon,
+  MonitorIcon,
+  RotateCwIcon,
+  SmartphoneIcon,
+  TabletIcon,
+} from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   CodeBlock,
   CodeBlockContainer,
@@ -13,6 +22,13 @@ import {
 } from "streamdown";
 
 type View = "code" | "preview";
+type Viewport = "desktop" | "tablet" | "mobile";
+
+const VIEWPORT_WIDTHS: Record<Viewport, string> = {
+  desktop: "100%",
+  tablet: "768px",
+  mobile: "375px",
+};
 
 /**
  * Sandbox flags for the Live Preview iframe. `allow-same-origin` is deliberately
@@ -41,16 +57,20 @@ function ToggleButton({
   active,
   onClick,
   icon,
+  title,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   icon: ReactNode;
-  children: ReactNode;
+  title?: string;
+  children?: ReactNode;
 }) {
   return (
     <button
       type="button"
+      title={title}
+      aria-label={title}
       aria-pressed={active}
       onClick={onClick}
       className={cn(
@@ -68,9 +88,20 @@ function ToggleButton({
 
 export function HtmlArtifact({ code, language, isIncomplete }: CustomRendererProps) {
   const [chosen, setChosen] = useState<View | null>(null);
+  const [viewport, setViewport] = useState<Viewport>("desktop");
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const view = resolveView(chosen, isIncomplete);
   const previewSrcDoc = useMemo(() => injectPreviewBridge(code), [code]);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isFullscreen]);
 
   const actions = (
     <>
@@ -81,7 +112,10 @@ export function HtmlArtifact({ code, language, isIncomplete }: CustomRendererPro
       >
         <ToggleButton
           active={view === "code"}
-          onClick={() => setChosen("code")}
+          onClick={() => {
+            setIsFullscreen(false);
+            setChosen("code");
+          }}
           icon={<Code2Icon className="size-3.5" />}
         >
           Code
@@ -94,17 +128,60 @@ export function HtmlArtifact({ code, language, isIncomplete }: CustomRendererPro
           Live Preview
         </ToggleButton>
       </div>
+
       {view === "preview" && (
-        <button
-          type="button"
-          aria-label="Reload preview"
-          title="Reload preview"
-          onClick={() => setReloadKey((k) => k + 1)}
-          className="cursor-pointer p-1 text-muted-foreground transition-all hover:text-foreground"
-        >
-          <RotateCwIcon className="size-3.5" />
-        </button>
+        <>
+          <div
+            role="group"
+            aria-label="Preview screen size"
+            className="hidden items-center gap-0.5 rounded-md border border-border bg-background p-0.5 sm:flex"
+          >
+            <ToggleButton
+              active={viewport === "desktop"}
+              onClick={() => setViewport("desktop")}
+              icon={<MonitorIcon className="size-3.5" />}
+              title="Desktop view (100%)"
+            />
+            <ToggleButton
+              active={viewport === "tablet"}
+              onClick={() => setViewport("tablet")}
+              icon={<TabletIcon className="size-3.5" />}
+              title="Tablet view (768px)"
+            />
+            <ToggleButton
+              active={viewport === "mobile"}
+              onClick={() => setViewport("mobile")}
+              icon={<SmartphoneIcon className="size-3.5" />}
+              title="Mobile view (375px)"
+            />
+          </div>
+
+          <button
+            type="button"
+            aria-label={isFullscreen ? "Exit fullscreen" : "Expand fullscreen"}
+            title={isFullscreen ? "Exit fullscreen (Esc)" : "Expand fullscreen"}
+            onClick={() => setIsFullscreen((f) => !f)}
+            className="cursor-pointer p-1 text-muted-foreground transition-all hover:text-foreground"
+          >
+            {isFullscreen ? (
+              <Minimize2Icon className="size-3.5" />
+            ) : (
+              <Maximize2Icon className="size-3.5" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            aria-label="Reload preview"
+            title="Reload preview"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="cursor-pointer p-1 text-muted-foreground transition-all hover:text-foreground"
+          >
+            <RotateCwIcon className="size-3.5" />
+          </button>
+        </>
       )}
+
       <CodeBlockDownloadButton code={code} language="html" />
       <CodeBlockCopyButton code={code} />
     </>
@@ -119,21 +196,42 @@ export function HtmlArtifact({ code, language, isIncomplete }: CustomRendererPro
   }
 
   return (
-    <CodeBlockContainer language={language} isIncomplete={isIncomplete}>
+    <CodeBlockContainer
+      language={language}
+      isIncomplete={isIncomplete}
+      className={cn(
+        isFullscreen && "fixed inset-0 z-50 m-0 flex h-screen w-screen flex-col rounded-none bg-background",
+      )}
+    >
       <CodeBlockHeader language={language} />
       <div className="pointer-events-none absolute top-2 right-2 z-10 flex items-center">
-        <div className="pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-sidebar bg-sidebar/80 px-1.5 py-1">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-sidebar bg-sidebar/90 px-1.5 py-1 backdrop-blur-sm">
           {actions}
         </div>
       </div>
-      <div className="h-[480px] min-h-[200px] resize-y overflow-hidden rounded-md border border-border bg-preview-canvas">
-        <iframe
-          key={reloadKey}
-          title="Live Preview"
-          srcDoc={previewSrcDoc}
-          sandbox={PREVIEW_SANDBOX}
-          className="size-full border-0 bg-preview-canvas"
-        />
+      <div
+        className={cn(
+          "flex w-full justify-center overflow-x-auto border border-border bg-neutral-950/60 transition-all",
+          isFullscreen
+            ? "min-h-0 flex-1 rounded-none border-x-0 border-b-0"
+            : "h-[480px] min-h-[200px] resize-y overflow-y-hidden rounded-md",
+        )}
+      >
+        <div
+          style={{ width: VIEWPORT_WIDTHS[viewport], maxWidth: "100%" }}
+          className={cn(
+            "h-full transition-[width] duration-200 ease-out",
+            viewport !== "desktop" && "border-x border-border/80 shadow-2xl",
+          )}
+        >
+          <iframe
+            key={reloadKey}
+            title="Live Preview"
+            srcDoc={previewSrcDoc}
+            sandbox={PREVIEW_SANDBOX}
+            className="size-full border-0 bg-preview-canvas"
+          />
+        </div>
       </div>
     </CodeBlockContainer>
   );
